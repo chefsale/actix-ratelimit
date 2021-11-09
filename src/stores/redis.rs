@@ -36,6 +36,7 @@ impl RedisStore {
     /// ```
     pub fn connect<S: Into<String>>(addr: S) -> Addr<Self> {
         let addr = addr.into();
+        info!("Connecting to Redis Store at address: {}", addr);
         let mut backoff = ExponentialBackoff::default();
         backoff.max_elapsed_time = None;
         Supervisor::start(|_| RedisStore {
@@ -65,14 +66,10 @@ impl Actor for RedisStore {
                     fut.into_actor(act).spawn(context);
                 }
                 Err(e) => {
-                    error!("Error connecting to redis: {}", &e);
-                    if let Some(timeout) = act.backoff.next_backoff() {
-                        context.run_later(timeout, |_, ctx| ctx.stop());
-                    }
+                    panic!("Error connecting to redis: {}", &e);
                 }
             };
             info!("Connected to redis server");
-            act.backoff.reset();
         })
         .wait(ctx);
     }
@@ -89,9 +86,11 @@ impl Handler<GetAddr> for RedisStore {
     type Result = Result<MultiplexedConnection, ARError>;
     fn handle(&mut self, _: GetAddr, ctx: &mut Self::Context) -> Self::Result {
         if let Some(con) = &self.client {
+            debug!("Handling incoming connection");
             Ok(con.clone())
         } else {
             // No connection exists
+            debug!("Incoming connection does not exists");
             if let Some(backoff) = self.backoff.next_backoff() {
                 ctx.run_later(backoff, |_, ctx| ctx.stop());
             };
@@ -240,6 +239,7 @@ impl Handler<ActorMessage> for RedisStoreActor {
             }
         } else {
             ctx.stop();
+            println!("Not Connected to the Redis DB");
             ActorResponse::Set(Box::pin(async move { Err(ARError::Disconnected) }))
         }
     }
