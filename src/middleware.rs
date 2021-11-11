@@ -8,6 +8,7 @@ use actix_web::{
 };
 use futures::future::{ok, Ready};
 use log::*;
+use reqwest;
 use std::{
     cell::RefCell,
     future::Future,
@@ -168,15 +169,19 @@ where
         let mut srv = self.service.clone();
         let mut max_requests = self.max_requests;
 
-        if !self.quota_service.is_empty() {
-            // TODO(chefsale): replace with an actual request
-            max_requests = 1000;
-        }
-
         let interval = Duration::from_secs(self.interval);
         let identifier = self.identifier.clone();
+        let identifier: String = (identifier)(&req).unwrap();
+
+        // Use quota service instead if specified
+        if !self.quota_service.is_empty() {
+            // TODO(chefsale): replace with an actual request
+            let client = reqwest::blocking::Client::new();
+            let body = client.post("http://localhost:1234").body(identifier.clone()).send().unwrap().text().unwrap();
+            max_requests = body.parse::<usize>().unwrap();
+        }
+
         Box::pin(async move {
-            let identifier: String = (identifier)(&req)?;
             let remaining: ActorResponse = store
                 .send(ActorMessage::Get(String::from(&identifier)))
                 .await?;
