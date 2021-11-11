@@ -49,6 +49,7 @@ where
 {
     interval: Duration,
     max_requests: usize,
+    quota_service: String,
     store: Addr<T>,
     identifier: Rc<Box<dyn Fn(&ServiceRequest) -> Result<String, ARError>>>,
 }
@@ -70,6 +71,7 @@ where
         RateLimiter {
             interval: Duration::from_secs(0),
             max_requests: 0,
+            quota_service: "".to_string(),
             store: store,
             identifier: Rc::new(Box::new(identifier)),
         }
@@ -84,6 +86,11 @@ where
     /// Specify the maximum number of requests allowed in the given interval.
     pub fn with_max_requests(mut self, max_requests: usize) -> Self {
         self.max_requests = max_requests;
+        self
+    }
+
+    pub fn with_quota_service(mut self, quota_service: String) -> Self {
+        self.quota_service = quota_service;
         self
     }
 
@@ -117,6 +124,7 @@ where
             service: Rc::new(RefCell::new(service)),
             store: self.store.clone(),
             max_requests: self.max_requests,
+            quota_service: self.quota_service.clone(),
             interval: self.interval.as_secs(),
             identifier: self.identifier.clone(),
         })
@@ -133,6 +141,7 @@ where
     store: Addr<T>,
     // Exists here for the sole purpose of knowing the max_requests and interval from RateLimiter
     max_requests: usize,
+    quota_service: String,
     interval: u64,
     identifier: Rc<Box<dyn Fn(&ServiceRequest) -> Result<String, ARError> + 'static>>,
 }
@@ -157,7 +166,13 @@ where
     fn call(&mut self, req: ServiceRequest) -> Self::Future {
         let store = self.store.clone();
         let mut srv = self.service.clone();
-        let max_requests = self.max_requests;
+        let mut max_requests = self.max_requests;
+
+        if !self.quota_service.is_empty() {
+            // TODO(chefsale): replace with an actual request
+            max_requests = 1000;
+        }
+
         let interval = Duration::from_secs(self.interval);
         let identifier = self.identifier.clone();
         Box::pin(async move {
