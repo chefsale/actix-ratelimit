@@ -8,7 +8,6 @@ use actix_web::{
 };
 use futures::future::{ok, Ready};
 use log::*;
-use reqwest;
 use std::{
     cell::RefCell,
     future::Future,
@@ -18,6 +17,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
+use serde::{ Deserialize, Serialize };
 
 use crate::{errors::ARError, ActorMessage, ActorResponse};
 
@@ -147,6 +147,12 @@ where
     identifier: Rc<Box<dyn Fn(&ServiceRequest) -> Result<String, ARError> + 'static>>,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+struct TokenBody {
+  token: String,
+  quota: usize,
+}
+
 impl<T, S, B> Service for RateLimitMiddleware<S, T>
 where
     T: Handler<ActorMessage> + 'static,
@@ -176,9 +182,19 @@ where
         // Use quota service instead if specified
         if !self.quota_service.is_empty() {
             // TODO(chefsale): replace with an actual request
+            use std::collections::HashMap;
+            let mut map = HashMap::new();
+            map.insert("token", identifier.clone());
+
             let client = reqwest::blocking::Client::new();
-            let body = client.post("http://localhost:1234").body(identifier.clone()).send().unwrap().text().unwrap();
-            max_requests = body.parse::<usize>().unwrap();
+            //TODO(mhala) handle errors gracefully
+            let res = client.post("http://localhost:8080/api/v1/token/validate")
+                .header("Authorization", "17cf1c20e93a5e6c76f38d720a07b68aec259933efcd4e97e3e5853f027730f7")
+                .json(&map)
+                .send().unwrap();
+            let value: TokenBody = res.json().unwrap();
+            info!("Auth server response: {}", value.quota);
+            max_requests = value.quota;
         }
 
         Box::pin(async move {
