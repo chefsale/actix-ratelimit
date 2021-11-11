@@ -188,7 +188,7 @@ pub mod errors;
 pub mod middleware;
 pub mod stores;
 use errors::ARError;
-pub use middleware::RateLimiter;
+pub use middleware::{  RateLimiter, QuotaChecker };
 
 #[cfg(feature = "memcached")]
 pub use stores::memcached::{MemcacheStore, MemcacheStoreActor};

@@ -17,7 +17,6 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use serde::{ Deserialize, Serialize };
 
 use crate::{errors::ARError, ActorMessage, ActorResponse};
 
@@ -43,25 +42,29 @@ use crate::{errors::ARError, ActorMessage, ActorResponse};
 ///                         .with_max_requests(100);
 /// }
 /// ```
-pub struct RateLimiter<T>
+pub struct RateLimiter<T, A>
 where
     T: Handler<ActorMessage> + Send + Sync + 'static,
     T::Context: ToEnvelope<T, ActorMessage>,
 {
     interval: Duration,
     max_requests: usize,
-    quota_service: String,
     store: Addr<T>,
     identifier: Rc<Box<dyn Fn(&ServiceRequest) -> Result<String, ARError>>>,
+    auth_quota: A
 }
 
-impl<T> RateLimiter<T>
+pub trait QuotaChecker {
+    fn check_quota(&self, req: &ServiceRequest, identifier: String) -> usize;
+}
+
+impl<T,A:QuotaChecker> RateLimiter<T, A>
 where
     T: Handler<ActorMessage> + Send + Sync + 'static,
     <T as Actor>::Context: ToEnvelope<T, ActorMessage>,
 {
     /// Creates a new instance of `RateLimiter` with the provided address of `StoreActor`.
-    pub fn new(store: Addr<T>) -> Self {
+    pub fn new(store: Addr<T>, auth_quota: A) -> Self {
         let identifier = |req: &ServiceRequest| {
             let connection_info = req.connection_info();
             let ip = connection_info
@@ -72,9 +75,9 @@ where
         RateLimiter {
             interval: Duration::from_secs(0),
             max_requests: 0,
-            quota_service: "".to_string(),
-            store: store,
+            store,
             identifier: Rc::new(Box::new(identifier)),
+            auth_quota,
         }
     }
 
@@ -90,11 +93,6 @@ where
         self
     }
 
-    pub fn with_quota_service(mut self, quota_service: String) -> Self {
-        self.quota_service = quota_service;
-        self
-    }
-
     /// Function to get the identifier for the client request
     pub fn with_identifier<F: Fn(&ServiceRequest) -> Result<String, ARError> + 'static>(
         mut self,
@@ -105,7 +103,7 @@ where
     }
 }
 
-impl<T, S, B> Transform<S> for RateLimiter<T>
+impl<T, S, B, A: QuotaChecker + Clone > Transform<S> for RateLimiter<T, A>
 where
     T: Handler<ActorMessage> + Send + Sync + 'static,
     T::Context: ToEnvelope<T, ActorMessage>,
@@ -117,7 +115,7 @@ where
     type Response = ServiceResponse<B>;
     type Error = S::Error;
     type InitError = ();
-    type Transform = RateLimitMiddleware<S, T>;
+    type Transform = RateLimitMiddleware<S, T, A>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
@@ -125,15 +123,15 @@ where
             service: Rc::new(RefCell::new(service)),
             store: self.store.clone(),
             max_requests: self.max_requests,
-            quota_service: self.quota_service.clone(),
             interval: self.interval.as_secs(),
             identifier: self.identifier.clone(),
+            auth_quota: self.auth_quota.clone(),
         })
     }
 }
 
 /// Service factory for RateLimiter
-pub struct RateLimitMiddleware<S, T>
+pub struct RateLimitMiddleware<S, T, A>
 where
     S: 'static,
     T: Handler<ActorMessage> + 'static,
@@ -142,18 +140,12 @@ where
     store: Addr<T>,
     // Exists here for the sole purpose of knowing the max_requests and interval from RateLimiter
     max_requests: usize,
-    quota_service: String,
     interval: u64,
     identifier: Rc<Box<dyn Fn(&ServiceRequest) -> Result<String, ARError> + 'static>>,
+    auth_quota: A,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-struct TokenBody {
-  token: String,
-  quota: usize,
-}
-
-impl<T, S, B> Service for RateLimitMiddleware<S, T>
+impl<T, S, B, A:QuotaChecker> Service for RateLimitMiddleware<S, T, A>
 where
     T: Handler<ActorMessage> + 'static,
     S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = AWError> + 'static,
@@ -178,24 +170,10 @@ where
         let interval = Duration::from_secs(self.interval);
         let identifier = self.identifier.clone();
         let identifier: String = (identifier)(&req).unwrap();
+        info!("Max request for identifier: {}", max_requests);
 
-        // Use quota service instead if specified
-        if !self.quota_service.is_empty() {
-            // TODO(chefsale): replace with an actual request
-            use std::collections::HashMap;
-            let mut map = HashMap::new();
-            map.insert("token", identifier.clone());
-
-            let client = reqwest::blocking::Client::new();
-            //TODO(mhala) handle errors gracefully
-            let res = client.post("http://localhost:8080/api/v1/token/validate")
-                .header("Authorization", "17cf1c20e93a5e6c76f38d720a07b68aec259933efcd4e97e3e5853f027730f7")
-                .json(&map)
-                .send().unwrap();
-            let value: TokenBody = res.json().unwrap();
-            info!("Auth server response: {}", value.quota);
-            max_requests = value.quota;
-        }
+        //TODO(mhala) handle errors gracefully
+        max_requests =  self.auth_quota.check_quota(&req , identifier.clone());
 
         Box::pin(async move {
             let remaining: ActorResponse = store
