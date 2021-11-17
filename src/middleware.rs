@@ -48,14 +48,14 @@ where
     T::Context: ToEnvelope<T, ActorMessage>,
 {
     interval: Duration,
-    max_requests: usize,
     store: Addr<T>,
     identifier: Rc<Box<dyn Fn(&ServiceRequest) -> Result<String, ARError>>>,
-    auth_quota: A
+    auth_quota: A,
 }
 
 pub trait QuotaChecker {
-    fn check_quota(&self, req: &ServiceRequest, identifier: String) -> usize;
+    fn check_quota(&self, req: &ServiceRequest, identifier: String) -> Option<usize>;
+    fn whitelisted(&self, req: &ServiceRequest) -> bool;
 }
 
 impl<T,A:QuotaChecker> RateLimiter<T, A>
@@ -74,7 +74,6 @@ where
         };
         RateLimiter {
             interval: Duration::from_secs(0),
-            max_requests: 0,
             store,
             identifier: Rc::new(Box::new(identifier)),
             auth_quota,
@@ -84,12 +83,6 @@ where
     /// Specify the interval. The counter for a client is reset after this interval
     pub fn with_interval(mut self, interval: Duration) -> Self {
         self.interval = interval;
-        self
-    }
-
-    /// Specify the maximum number of requests allowed in the given interval.
-    pub fn with_max_requests(mut self, max_requests: usize) -> Self {
-        self.max_requests = max_requests;
         self
     }
 
@@ -122,7 +115,6 @@ where
         ok(RateLimitMiddleware {
             service: Rc::new(RefCell::new(service)),
             store: self.store.clone(),
-            max_requests: self.max_requests,
             interval: self.interval.as_secs(),
             identifier: self.identifier.clone(),
             auth_quota: self.auth_quota.clone(),
@@ -139,7 +131,6 @@ where
     service: Rc<RefCell<S>>,
     store: Addr<T>,
     // Exists here for the sole purpose of knowing the max_requests and interval from RateLimiter
-    max_requests: usize,
     interval: u64,
     identifier: Rc<Box<dyn Fn(&ServiceRequest) -> Result<String, ARError> + 'static>>,
     auth_quota: A,
@@ -163,19 +154,35 @@ where
     }
 
     fn call(&mut self, req: ServiceRequest) -> Self::Future {
-        let store = self.store.clone();
+        let mut srv_1 = self.service.clone();
+        if self.auth_quota.whitelisted(&req) {
+            return Box::pin(async move {
+                let fut = srv_1.call(req);
+                let mut res = fut.await?;
+                let headers = res.headers_mut();
+                headers.insert(HeaderName::from_static("x-ratelimit-whitelisted"),HeaderValue::from_static( "true"));
+                Ok::<Self::Response, Self::Error>(res)
+            });
+        }
         let mut srv = self.service.clone();
-        let mut max_requests = self.max_requests;
+        let store = self.store.clone();
 
         let interval = Duration::from_secs(self.interval);
         let identifier = self.identifier.clone();
         let identifier: String = (identifier)(&req).unwrap();
-        info!("Max request for identifier: {}", max_requests);
+        let quota  =  self.auth_quota.check_quota(&req , identifier.clone());
 
         //TODO(mhala) handle errors gracefully
-        max_requests =  self.auth_quota.check_quota(&req , identifier.clone());
+        
 
         Box::pin(async move {
+            if quota.is_none() {
+                let response = HttpResponse::BadRequest();
+                // let mut response = (error_callback)(&mut response);
+                return Err(response.into())
+            }
+            let max_requests = quota.unwrap();
+            info!("Max request for identifier: {} {}", identifier, max_requests);
             let remaining: ActorResponse = store
                 .send(ActorMessage::Get(String::from(&identifier)))
                 .await?;
