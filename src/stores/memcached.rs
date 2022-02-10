@@ -193,7 +193,7 @@ impl Handler<ActorMessage> for MemcacheStoreActor {
                         ActorResponse::Update(Box::pin(async move {
                             let result = client.decrement(&key, value as u64);
                             match result {
-                                Ok(c) => Ok(c as usize),
+                                Ok(c) => Ok(c as i32),
                                 Err(e) => Err(ARError::ReadWriteError(format!("{:?}", &e))),
                             }
                         }))
@@ -202,7 +202,7 @@ impl Handler<ActorMessage> for MemcacheStoreActor {
                         let result: Result<Option<u64>, _> = client.get(&key);
                         match result {
                             Ok(c) => match c {
-                                Some(v) => Ok(Some(v as usize)),
+                                Some(v) => Ok(Some(v as i32)),
                                 None => Ok(None),
                             },
                             Err(e) => Err(ARError::ReadWriteError(format!("{:?}", &e))),
@@ -263,7 +263,7 @@ mod tests {
         let res = addr
             .send(ActorMessage::Set {
                 key: "hello".to_string(),
-                value: 30usize,
+                value: 30i32,
                 expiry: Duration::from_secs(5),
             })
             .await;
@@ -286,7 +286,7 @@ mod tests {
         let res = addr
             .send(ActorMessage::Set {
                 key: "hello".to_string(),
-                value: 30usize,
+                value: 30i32,
                 expiry: expiry,
             })
             .await;
@@ -304,7 +304,7 @@ mod tests {
             ActorResponse::Get(c) => match c.await {
                 Ok(d) => {
                     let d = d.unwrap();
-                    assert_eq!(d, 30usize);
+                    assert_eq!(d, 30i32);
                 }
                 Err(e) => panic!("Shouldn't happen {}", &e),
             },
@@ -321,7 +321,7 @@ mod tests {
         let res = addr
             .send(ActorMessage::Set {
                 key: "hello_test".to_string(),
-                value: 30usize,
+                value: 30i32,
                 expiry: expiry,
             })
             .await;

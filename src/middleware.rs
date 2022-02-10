@@ -54,11 +54,14 @@ where
 }
 
 pub trait QuotaChecker {
-    fn check_quota(&self, req: &ServiceRequest, identifier: String) -> Option<usize>;
+    fn check_quota(&self, req: &ServiceRequest, identifier: String) -> Option<i32>;
     fn whitelisted(&self, req: &ServiceRequest) -> bool;
+    //amount of unverified request to let pass
+    fn free_quota_amount(&self) -> i32;
+    fn free_quota_identifier(&self) -> String;
 }
 
-impl<T,A:QuotaChecker> RateLimiter<T, A>
+impl<T, A: QuotaChecker> RateLimiter<T, A>
 where
     T: Handler<ActorMessage> + Send + Sync + 'static,
     <T as Actor>::Context: ToEnvelope<T, ActorMessage>,
@@ -96,7 +99,7 @@ where
     }
 }
 
-impl<T, S, B, A: QuotaChecker + Clone > Transform<S> for RateLimiter<T, A>
+impl<T, S, B, A: QuotaChecker + Clone> Transform<S> for RateLimiter<T, A>
 where
     T: Handler<ActorMessage> + Send + Sync + 'static,
     T::Context: ToEnvelope<T, ActorMessage>,
@@ -136,7 +139,7 @@ where
     auth_quota: A,
 }
 
-impl<T, S, B, A:QuotaChecker> Service for RateLimitMiddleware<S, T, A>
+impl<T, S, B, A: QuotaChecker> Service for RateLimitMiddleware<S, T, A>
 where
     T: Handler<ActorMessage> + 'static,
     S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = AWError> + 'static,
@@ -160,7 +163,10 @@ where
                 let fut = srv_1.call(req);
                 let mut res = fut.await?;
                 let headers = res.headers_mut();
-                headers.insert(HeaderName::from_static("x-ratelimit-whitelisted"),HeaderValue::from_static( "true"));
+                headers.insert(
+                    HeaderName::from_static("x-ratelimit-whitelisted"),
+                    HeaderValue::from_static("true"),
+                );
                 Ok::<Self::Response, Self::Error>(res)
             });
         }
@@ -169,20 +175,19 @@ where
 
         let interval = Duration::from_secs(self.interval);
         let identifier = self.identifier.clone();
-        let identifier: String = (identifier)(&req).unwrap();
-        let quota  =  self.auth_quota.check_quota(&req , identifier.clone());
-
-        //TODO(mhala) handle errors gracefully
-        
+        let mut identifier: String = (identifier)(&req).unwrap();
+        let mut quota = self.auth_quota.check_quota(&req, identifier.clone());
+        if quota.is_none() {
+            quota = Some(self.auth_quota.free_quota_amount());
+            identifier = self.auth_quota.free_quota_identifier();
+        }
 
         Box::pin(async move {
-            if quota.is_none() {
-                let response = HttpResponse::BadRequest();
-                // let mut response = (error_callback)(&mut response);
-                return Err(response.into())
-            }
             let max_requests = quota.unwrap();
-            info!("Max request for identifier: {} {}", identifier, max_requests);
+            info!(
+                "Max request for identifier: {} {}",
+                identifier, max_requests
+            );
             let remaining: ActorResponse = store
                 .send(ActorMessage::Get(String::from(&identifier)))
                 .await?;
@@ -198,7 +203,7 @@ where
                             ActorResponse::Expire(dur) => dur.await?,
                             _ => unreachable!(),
                         };
-                        if c == 0 {
+                        if c <= 0 {
                             info!("Limit exceeded for client: {}", &identifier);
                             let mut response = HttpResponse::TooManyRequests();
                             // let mut response = (error_callback)(&mut response);
@@ -214,7 +219,7 @@ where
                                     value: 1,
                                 })
                                 .await?;
-                            let updated_value: usize = match res {
+                            let updated_value: i32 = match res {
                                 ActorResponse::Update(c) => c.await?,
                                 _ => unreachable!(),
                             };

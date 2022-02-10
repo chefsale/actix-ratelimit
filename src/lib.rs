@@ -188,7 +188,7 @@ pub mod errors;
 pub mod middleware;
 pub mod stores;
 use errors::ARError;
-pub use middleware::{  RateLimiter, QuotaChecker };
+pub use middleware::{QuotaChecker, RateLimiter};
 
 #[cfg(feature = "memcached")]
 pub use stores::memcached::{MemcacheStore, MemcacheStoreActor};
@@ -211,11 +211,11 @@ pub enum ActorMessage {
     /// Set the count of the client identified by `key` to `value` valid for `expiry`
     Set {
         key: String,
-        value: usize,
+        value: i32,
         expiry: Duration,
     },
     /// Change the value of count for the client identified by `key` by `value`
-    Update { key: String, value: usize },
+    Update { key: String, value: i32},
     /// Get the expiration time for the client.
     Expire(String),
     /// Remove the client from the store
@@ -232,15 +232,15 @@ pub type Output<T> = Pin<Box<dyn Future<Output = Result<T, ARError>> + Send>>;
 /// Represents data returned in response to `Messages` by a `StoreActor`
 pub enum ActorResponse {
     /// Returned in response to [Messages::Get](enum.Messages.html)
-    Get(Output<Option<usize>>),
+    Get(Output<Option<i32>>),
     /// Returned in response to [Messages::Set](enum.Messages.html)
     Set(Output<()>),
     /// Returned in response to [Messages::Update](enum.Messages.html)
-    Update(Output<usize>),
+    Update(Output<i32>),
     /// Returned in response to [Messages::Expire](enum.Messages.html)
     Expire(Output<Duration>),
     /// Returned in response to [Messages::Remove](enum.Messages.html)
-    Remove(Output<usize>),
+    Remove(Output<i32>),
 }
 
 impl<A, M> MessageResponse<A, M> for ActorResponse

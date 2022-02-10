@@ -12,7 +12,7 @@ use crate::{ActorMessage, ActorResponse};
 /// Type used to create a concurrent hashmap store
 #[derive(Clone)]
 pub struct MemoryStore {
-    inner: Arc<DashMap<String, (usize, Duration)>>,
+    inner: Arc<DashMap<String, (i32, Duration)>>,
 }
 
 impl MemoryStore {
@@ -27,7 +27,7 @@ impl MemoryStore {
     pub fn new() -> Self {
         debug!("Creating new MemoryStore");
         MemoryStore {
-            inner: Arc::new(DashMap::<String, (usize, Duration)>::new()),
+            inner: Arc::new(DashMap::<String, (i32, Duration)>::new()),
         }
     }
 
@@ -35,7 +35,7 @@ impl MemoryStore {
     pub fn with_capacity(capacity: usize) -> Self {
         debug!("Creating new MemoryStore");
         MemoryStore {
-            inner: Arc::new(DashMap::<String, (usize, Duration)>::with_capacity(
+            inner: Arc::new(DashMap::<String, (i32, Duration)>::with_capacity(
                 capacity,
             )),
         }
@@ -44,7 +44,7 @@ impl MemoryStore {
 
 /// Actor for memory store
 pub struct MemoryStoreActor {
-    inner: Arc<DashMap<String, (usize, Duration)>>,
+    inner: Arc<DashMap<String, (i32, Duration)>>,
 }
 
 impl From<MemoryStore> for MemoryStoreActor {
@@ -86,7 +86,7 @@ impl Handler<ActorMessage> for MemoryStoreActor {
             }
             ActorMessage::Update { key, value } => match self.inner.get_mut(&key) {
                 Some(mut c) => {
-                    let val_mut: &mut (usize, Duration) = c.value_mut();
+                    let val_mut: &mut (i32, Duration) = c.value_mut();
                     if val_mut.0 > value {
                         val_mut.0 -= value;
                     } else {
@@ -159,7 +159,7 @@ mod tests {
         let res = addr
             .send(ActorMessage::Set {
                 key: "hello".to_string(),
-                value: 30usize,
+                value: 30i32,
                 expiry: Duration::from_secs(5),
             })
             .await;
@@ -181,7 +181,7 @@ mod tests {
         let res = addr
             .send(ActorMessage::Set {
                 key: "hello".to_string(),
-                value: 30usize,
+                value: 30i32,
                 expiry: expiry,
             })
             .await;
@@ -199,7 +199,7 @@ mod tests {
             ActorResponse::Get(c) => match c.await {
                 Ok(d) => {
                     let d = d.unwrap();
-                    assert_eq!(d, 30usize);
+                    assert_eq!(d, 30i32);
                 }
                 Err(e) => panic!("Shouldn't happen {}", &e),
             },
@@ -215,7 +215,7 @@ mod tests {
         let res = addr
             .send(ActorMessage::Set {
                 key: "hello".to_string(),
-                value: 30usize,
+                value: 30i32,
                 expiry: expiry,
             })
             .await;
