@@ -1,6 +1,6 @@
 //! Memcached store for rate limiting
 use crate::errors::ARError;
-use crate::{ActorMessage, ActorResponse};
+use crate::{ActorMessage, ActorResponse, QuotaResponse};
 use actix::prelude::*;
 use backoff::backoff::Backoff;
 use backoff::ExponentialBackoff;
@@ -202,28 +202,13 @@ impl Handler<ActorMessage> for MemcacheStoreActor {
                         let result: Result<Option<u64>, _> = client.get(&key);
                         match result {
                             Ok(c) => match c {
-                                Some(v) => Ok(Some(v as i32)),
+                                Some(v) => Ok(Some(QuotaResponse {
+                                    key: key,
+                                    quota_remaining: v,
+                                    expiry: 0, //TODO(mhala) Fetch expire value from the memcache
+                                })),
                                 None => Ok(None),
                             },
-                            Err(e) => Err(ARError::ReadWriteError(format!("{:?}", &e))),
-                        }
-                    })),
-                    ActorMessage::Expire(key) => ActorResponse::Expire(Box::pin(async move {
-                        let result: Result<Option<u64>, _> =
-                            client.get(&format!("{}:expire", &key));
-                        match result {
-                            Ok(c) => {
-                                if let Some(d) = c {
-                                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                                    let now = now.as_secs().try_into().unwrap();
-                                    let res = d.checked_sub(now).unwrap_or_else(|| 0);
-                                    Ok(Duration::from_secs(res))
-                                } else {
-                                    Err(ARError::ReadWriteError(
-                                        "error: expiration data not found".to_owned(),
-                                    ))
-                                }
-                            }
                             Err(e) => Err(ARError::ReadWriteError(format!("{:?}", &e))),
                         }
                     })),
@@ -304,52 +289,9 @@ mod tests {
             ActorResponse::Get(c) => match c.await {
                 Ok(d) => {
                     let d = d.unwrap();
-                    assert_eq!(d, 30i32);
+                    assert_eq!(d.quota_remaining, 30u64);
                 }
                 Err(e) => panic!("Shouldn't happen {}", &e),
-            },
-            _ => panic!("Shouldn't happen!"),
-        };
-    }
-
-    #[actix_rt::test]
-    async fn test_expiry() {
-        init();
-        let store = MemcacheStore::connect("memcache://127.0.0.1:11211");
-        let addr = MemcacheStoreActor::from(store.clone()).start();
-        let expiry = Duration::from_secs(3);
-        let res = addr
-            .send(ActorMessage::Set {
-                key: "hello_test".to_string(),
-                value: 30i32,
-                expiry: expiry,
-            })
-            .await;
-        let res = res.expect("Failed to send msg");
-        match res {
-            ActorResponse::Set(c) => match c.await {
-                Ok(()) => {}
-                Err(e) => panic!("Shouldn't happen {}", &e),
-            },
-            _ => panic!("Shouldn't happen!"),
-        }
-        assert_eq!(addr.connected(), true);
-
-        let res3 = addr
-            .send(ActorMessage::Expire("hello_test".to_string()))
-            .await;
-        let res3 = res3.expect("Failed to send msg");
-        match res3 {
-            ActorResponse::Expire(c) => match c.await {
-                Ok(dur) => {
-                    let now = Duration::from_secs(3);
-                    if dur > now {
-                        panic!("Shouldn't happen: {}, {}", &dur.as_secs(), &now.as_secs())
-                    }
-                }
-                Err(e) => {
-                    panic!("Shouldn't happen: {}", &e);
-                }
             },
             _ => panic!("Shouldn't happen!"),
         };

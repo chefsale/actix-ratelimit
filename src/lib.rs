@@ -215,9 +215,7 @@ pub enum ActorMessage {
         expiry: Duration,
     },
     /// Change the value of count for the client identified by `key` by `value`
-    Update { key: String, value: i32},
-    /// Get the expiration time for the client.
-    Expire(String),
+    Update { key: String, value: i32 },
     /// Remove the client from the store
     Remove(String),
 }
@@ -229,16 +227,19 @@ impl Message for ActorMessage {
 /// Wrapper type for `Pin<Box<dyn Future>>` type
 pub type Output<T> = Pin<Box<dyn Future<Output = Result<T, ARError>> + Send>>;
 
+pub struct QuotaResponse {
+    key: String,
+    quota_remaining: u64,
+    expiry: usize,
+}
 /// Represents data returned in response to `Messages` by a `StoreActor`
 pub enum ActorResponse {
     /// Returned in response to [Messages::Get](enum.Messages.html)
-    Get(Output<Option<i32>>),
+    Get(Output<Option<QuotaResponse>>),
     /// Returned in response to [Messages::Set](enum.Messages.html)
     Set(Output<()>),
     /// Returned in response to [Messages::Update](enum.Messages.html)
     Update(Output<i32>),
-    /// Returned in response to [Messages::Expire](enum.Messages.html)
-    Expire(Output<Duration>),
     /// Returned in response to [Messages::Remove](enum.Messages.html)
     Remove(Output<i32>),
 }

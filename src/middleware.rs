@@ -195,21 +195,13 @@ where
                 ActorResponse::Get(opt) => {
                     let opt = opt.await?;
                     if let Some(c) = opt {
-                        // Existing entry in store
-                        let expiry = store
-                            .send(ActorMessage::Expire(String::from(&identifier)))
-                            .await?;
-                        let reset: Duration = match expiry {
-                            ActorResponse::Expire(dur) => dur.await?,
-                            _ => unreachable!(),
-                        };
-                        if c <= 0 {
+                        if c.quota_remaining <= 0 {
                             info!("Limit exceeded for client: {}", &identifier);
                             let mut response = HttpResponse::TooManyRequests();
                             // let mut response = (error_callback)(&mut response);
                             response.set_header("x-ratelimit-limit", max_requests.to_string());
-                            response.set_header("x-ratelimit-remaining", c.to_string());
-                            response.set_header("x-ratelimit-reset", reset.as_secs().to_string());
+                            response.set_header("x-ratelimit-remaining", "0");
+                            response.set_header("x-ratelimit-reset", c.expiry.to_string());
                             Err(response.into())
                         } else {
                             // Decrement value
@@ -238,7 +230,7 @@ where
                             );
                             headers.insert(
                                 HeaderName::from_static("x-ratelimit-reset"),
-                                HeaderValue::from_str(reset.as_secs().to_string().as_str())?,
+                                HeaderValue::from_str(c.expiry.to_string().as_str())?,
                             );
                             Ok(res)
                         }
